@@ -57,7 +57,7 @@ depths = [
 
 # define function for creating request
 
-def build_wms_request(variable, x, y, depth):
+def build_wms_request(x, y, variable, depth):
     xmin = x-0.0
     ymin = y-0.0
     xmax = x+0.0000001
@@ -138,6 +138,25 @@ def build_test_sequence(x, y, step_size=0.2, n_steps=2):
                 represents a larger concentric circle around original point
     RETURN  test_seq: test sequence of long/lat coordinates for testing (list of numeric tuples)
     '''
+    dirs = [0, 90, 180, 270]
+    test_coords = []
+    for step in range(1, n_steps+1):
+        for dir in dirs:
+            test_coords.append(build_test_coords(x, y, dir=dir, step=step, step_size=step_size))
+    return test_coords
+
+def test_for_validity(x, y, variable=variables[0], depth=depths[0]):
+    '''
+    Tests location for validity, ie whether or not Copernicus offers time series
+    data at the given coordinates
+    INPUT   x: longitude coordinate (numeric)
+            y: latitude coordinate (numeric)
+            variable: Copernicus variable to use for test query (string)
+            depth: elevation to use for test query (numeric)
+    RETURN  valid: whether or not location is valid (boolean)
+    '''
+    test_req = build_wms_request(x, y, variable, depth)
+    test_resp = requests.get(test_req)
 
 
 # pull data
@@ -147,39 +166,7 @@ for index, row in gdf_mouths.iterrows():
     # say we have our x and y
     x, y = row['the_geom'].x, row['the_geom'].y
     
-    for variable in variables:
-        for depth in depths:
-            cmems_req = build_wms_request(variable, x, y, depth)
-            print(cmems_req)
-            response = requests.get(cmems_req)
-            break
+    test_seq = build_test_sequence(x, y)
+    break
 
 
-
-# preexisting:
-# set of points representing river mouths
-# table for data
-
-# cycle
-# for each point:
-# for each chemical & depth:
-# construct query
-# pull data from wms
-# hold xml response
-# convert to something, probably dataframe
-# (may choose to parallelize this process)
-# append to larger existing dataframe
-
-
-
-
-# at end: 
-# dump dataframe to file
-# clean existing persistent table
-# dump new dataframe into table
-
-# create temporary folder for holding execution files
-temp_dir = tempfile.TemporaryDirectory()
-print(temp_dir.name)
-# use temp_dir, and when done:
-temp_dir.cleanup()
