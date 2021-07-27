@@ -1,12 +1,13 @@
 # imports
 import logging
 from cartoframes.auth import set_default_credentials
-from cartoframes import read_carto
+from cartoframes import read_carto, to_carto
 import geopandas as gpd
 from datetime import datetime
 import dateutil.relativedelta
 import requests
 import xml.etree.ElementTree as ET
+import math
 
 import pandas as pd
 
@@ -95,7 +96,9 @@ def parse_response(response):
     INPUT   response: raw response object from requests library (requests.models.Response)
     RETURN  df_resp: structured data object for response (DataFrame)
     '''
-    root = ET.fromstring(example_resp.content)
+    if response.status_code != 200:
+        return None
+    root = ET.fromstring(response.content)
     response_dict = {}
     response_data_times = []
     response_data_values = []
@@ -122,6 +125,9 @@ def parse_response(response):
         if(child.tag == 'time'):
             response_data_times.append(datetime.strptime(child.text, dt_format))
         if(child.tag == 'value'):
+            if child.text == 'none':
+                # legitimate request, but no data available at this location (ie invalid coordinates)
+                return None
             response_data_values.append(float(child.text));
         # print(child.tag)
     # resp_cols = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','value']
@@ -134,17 +140,16 @@ def parse_response(response):
     df_resp['value'] = response_data_values
     return df_resp
 
+# # known-to-work query drawn from copernicus website (pretty viewer)
+# example_req = 'https://nrt.cmems-du.eu/thredds/wms/global-analysis-forecast-bio-001-028-monthly?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&QUERY_LAYERS=o2&BBOX=-39.04,-13.92,-39.0399999,-13.9199999&HEIGHT=1&WIDTH=1&INFO_FORMAT=text/xml&SRS=EPSG:4326&X=0&Y=0&elevation=-0.49402499198913574&time=2019-01-16T12:00:00.000Z/2021-05-16T12:00:00.000Z'
+# print(example_req)
+# example_resp = requests.get(example_req)
+# df_example = parse_response(example_resp)
 
-example_req = 'https://nrt.cmems-du.eu/thredds/wms/global-analysis-forecast-bio-001-028-monthly?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&QUERY_LAYERS=o2&BBOX=-39.04,-13.92,-39.0399999,-13.9199999&HEIGHT=1&WIDTH=1&INFO_FORMAT=text/xml&SRS=EPSG:4326&X=0&Y=0&elevation=-0.49402499198913574&time=2019-01-16T12:00:00.000Z/2021-05-16T12:00:00.000Z'
-print(example_req)
-example_resp = requests.get(example_req)
 test_req = build_wms_request(-39.04,-13.92,'o2',depths[0])
 print(test_req)
 test_resp = requests.get(test_req)
-print('requests identical? ', example_req == test_req)
-
-df_example_resp = parse_response(example_resp)
-
+df_test = parse_response(test_resp)
 
 
 def build_test_coords(x, y, dir=0, step=1, step_size=0.2):
@@ -158,24 +163,37 @@ def build_test_coords(x, y, dir=0, step=1, step_size=0.2):
             step_size: size of each step, in degrees (numeric)
     RETURN  coords: long/lat coordinates for test point (numeric tuple)
     '''
+    root_two = math.sqrt(2)
     if(dir==0):
         test_x = x + (step_size * step)
         test_y = y
+    elif(dir==45):
+        test_x = x + (step_size * step / root_two)
+        test_y = y + (step_size * step / root_two)
     elif(dir==90):
         test_x = x
         test_y = y + (step_size * step)
+    elif(dir==135):
+        test_x = x - (step_size * step / root_two)
+        test_y = y + (step_size * step / root_two)
     elif(dir==180):
         test_x = x - (step_size * step)
         test_y = y 
+    elif(dir==225):
+        test_x = x - (step_size * step / root_two)
+        test_y = y - (step_size * step / root_two)
     elif(dir==270):
         test_x = x 
         test_y = y - (step_size * step)
+    elif(dir==315):
+        test_x = x + (step_size * step / root_two)
+        test_y = y - (step_size * step / root_two)
     else:
         raise ValueError('Illegal argument for direction: '+dir+'. Must be E/N/W/S')
     return (test_x, test_y)
         
 
-def build_test_sequence(x, y, step_size=0.2, n_steps=2):
+def build_test_sequence(x, y, step_size=0.1, n_steps=4):
     '''
     Create sequence of test coordinates to perform crude search for valid location
     closest to original point
@@ -186,35 +204,75 @@ def build_test_sequence(x, y, step_size=0.2, n_steps=2):
                 represents a larger concentric circle around original point
     RETURN  test_seq: test sequence of long/lat coordinates for testing (list of numeric tuples)
     '''
-    dirs = [0, 90, 180, 270]
+    dirs = [0, 45, 90, 135, 180, 225, 270, 315]
     test_coords = []
     for step in range(1, n_steps+1):
         for dir in dirs:
             test_coords.append(build_test_coords(x, y, dir=dir, step=step, step_size=step_size))
     return test_coords
 
-def test_for_validity(x, y, variable=variables[0], depth=depths[0]):
-    '''
-    Tests location for validity, ie whether or not Copernicus offers time series
-    data at the given coordinates
-    INPUT   x: longitude coordinate (numeric)
-            y: latitude coordinate (numeric)
-            variable: Copernicus variable to use for test query (string)
-            depth: elevation to use for test query (numeric)
-    RETURN  valid: whether or not location is valid (boolean)
-    '''
-    test_req = build_wms_request(x, y, variable, depth)
-    test_resp = requests.get(test_req)
-
-
 # pull data
 gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
 
+test_existing_valid_coords = True
+valid_rows = []
+matching_rows = []
+updated_rows = []
+helpless_rows = []
+n_requests = 0
+
 for index, row in gdf_mouths.iterrows():
-    # say we have our x and y
+    x_valid = row['x_valid']
+    y_valid = row['y_valid']
+    if x_valid is not None and y_valid is not None and test_existing_valid_coords:
+        valid_req = build_wms_request(x_valid, y_valid, variables[0], depths[0])
+        valid_resp = requests.get(valid_req)
+        df_valid = parse_response(valid_resp)
+        if df_valid is None:
+            # this is a problem; valid point should return valid results
+            raise Exception('Supposedly valid point does not return valid result! '+
+                row.to_string())
+        else:
+            # don't need to do anything here
+            valid_rows.append(row['hyriv_id'])
+            continue
+    # if here, we do not have pre-existing, valid coordinates stored
     x, y = row['the_geom'].x, row['the_geom'].y
-    
-    test_seq = build_test_sequence(x, y)
-    break
+    point_req = build_wms_request(x, y, variables[0], depths[0])
+    point_resp = requests.get(point_req)
+    n_requests += 1
+    df_resp = parse_response(point_resp)
+    if df_resp is not None:
+        # good to go, response worked
+        row['x_valid'] = x
+        row['y_valid'] = y
+        matching_rows.append(row['hyriv_id'])
+        continue
+    else:
+        # query failed, need to find valid coordinates
+        found = False
+        test_seq = build_test_sequence(x, y, n_steps=5)
+        for test_coords in test_seq:
+            x_test = test_coords[0]
+            y_test = test_coords[1]
+            test_req = build_wms_request(x_test, y_test, variables[0], depths[0])
+            test_resp = requests.get(test_req)
+            n_requests += 1
+            df_test = parse_response(test_resp)
+            if df_test is not None:
+                # success; test_coords -> valid_coords
+                row['x_valid'] = x_test
+                row['y_valid'] = y_valid
+                updated_rows.append(row['hyriv_id'])
+                found = True
+                break
+        if not found:
+            print('Unable to find valid point for base river mouth: HYRIV_ID=' +
+                row['hyriv_id'])
+            helpless_rows.append(row['hyriv_id'])
+        # searching on this river mouth complete, whether successful or not
 
+print(n_requests)    
+print(gdf_mouths)
 
+to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
