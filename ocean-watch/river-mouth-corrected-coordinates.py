@@ -6,6 +6,7 @@ import geopandas as gpd
 from datetime import datetime
 import dateutil.relativedelta
 import requests
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 
@@ -87,16 +88,63 @@ def build_wms_request(x, y, variable, depth):
     return req_template.format(variable=variable, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, 
         depth=depth, date_end=date_end)
 
+# print(example_resp.content)
+def parse_response(response):
+    '''
+    Parse content of response from GetFeatureInfo query to Copernicus WMS
+    INPUT   response: raw response object from requests library (requests.models.Response)
+    RETURN  df_resp: structured data object for response (DataFrame)
+    '''
+    root = ET.fromstring(example_resp.content)
+    response_dict = {}
+    response_data_times = []
+    response_data_values = []
+
+    dt_format = '%Y-%m-%dT%H:%M:%S.000Z'
+
+    for child in root.iter('*'):
+        if(child.tag == 'FeatureInfoResponse'):
+            continue
+        if(child.tag == 'longitude'):
+            response_dict['longitude'] = float(child.text)
+        if(child.tag == 'latitude'):
+            response_dict['latitude'] = float(child.text)
+        if(child.tag == 'iIndex'):
+            response_dict['iIndex'] = int(child.text)
+        if(child.tag == 'jIndex'):
+            response_dict['jIndex'] = int(child.text)
+        if(child.tag == 'gridCentreLon'):
+            response_dict['gridCentreLon'] = float(child.text)
+        if(child.tag == 'gridCentreLat'):
+            response_dict['gridCentreLat'] = float(child.text)
+        if(child.tag == 'FeatureInfo'):
+            continue
+        if(child.tag == 'time'):
+            response_data_times.append(datetime.strptime(child.text, dt_format))
+        if(child.tag == 'value'):
+            response_data_values.append(float(child.text));
+        # print(child.tag)
+    # resp_cols = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','value']
+    df_resp = pd.DataFrame()
+    df_resp['longitude'] = [response_dict['longitude'] for i in range(len(response_data_times))]
+    df_resp['latitude'] = [response_dict['latitude'] for i in range(len(response_data_times))]
+    df_resp['gridCentreLon'] = [response_dict['gridCentreLon'] for i in range(len(response_data_times))]
+    df_resp['gridCentreLat'] = [response_dict['gridCentreLat'] for i in range(len(response_data_times))]
+    df_resp['dt'] = response_data_times
+    df_resp['value'] = response_data_values
+    return df_resp
+
+
 example_req = 'https://nrt.cmems-du.eu/thredds/wms/global-analysis-forecast-bio-001-028-monthly?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&QUERY_LAYERS=o2&BBOX=-39.04,-13.92,-39.0399999,-13.9199999&HEIGHT=1&WIDTH=1&INFO_FORMAT=text/xml&SRS=EPSG:4326&X=0&Y=0&elevation=-0.49402499198913574&time=2019-01-16T12:00:00.000Z/2021-05-16T12:00:00.000Z'
 print(example_req)
 example_resp = requests.get(example_req)
-
-
-test_req = build_wms_request('o2',-39.04,-13.92,depths[0])
+test_req = build_wms_request(-39.04,-13.92,'o2',depths[0])
 print(test_req)
 test_resp = requests.get(test_req)
-
 print('requests identical? ', example_req == test_req)
+
+df_example_resp = parse_response(example_resp)
+
 
 
 def build_test_coords(x, y, dir=0, step=1, step_size=0.2):
