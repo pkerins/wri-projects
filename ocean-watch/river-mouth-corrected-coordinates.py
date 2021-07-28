@@ -222,6 +222,9 @@ helpless_rows = []
 n_requests = 0
 
 for index, row in gdf_mouths.iterrows():
+    if index < 500:
+        # manual control over looping for interrupted runs
+        continue
     x_valid = row['x_valid']
     y_valid = row['y_valid']
     if x_valid is not None and y_valid is not None and test_existing_valid_coords:
@@ -244,8 +247,8 @@ for index, row in gdf_mouths.iterrows():
     df_resp = parse_response(point_resp)
     if df_resp is not None:
         # good to go, response worked
-        row['x_valid'] = x
-        row['y_valid'] = y
+        gdf_mouths.loc[index, 'x_valid'] = x
+        gdf_mouths.loc[index, 'y_valid'] = y
         matching_rows.append(row['hyriv_id'])
         continue
     else:
@@ -261,8 +264,8 @@ for index, row in gdf_mouths.iterrows():
             df_test = parse_response(test_resp)
             if df_test is not None:
                 # success; test_coords -> valid_coords
-                row['x_valid'] = x_test
-                row['y_valid'] = y_valid
+                gdf_mouths.loc[index, 'x_valid'] = x_test
+                gdf_mouths.loc[index, 'y_valid'] = y_test
                 updated_rows.append(row['hyriv_id'])
                 found = True
                 break
@@ -271,8 +274,12 @@ for index, row in gdf_mouths.iterrows():
                 row['hyriv_id'])
             helpless_rows.append(row['hyriv_id'])
         # searching on this river mouth complete, whether successful or not
+    # slow process. can save incremental progress to disk, then manage loop manually
+    if index != 0 and index % 500 == 0:
+        to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
 
 print(n_requests)    
 print(gdf_mouths)
 
 to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
+print ('end of script')
