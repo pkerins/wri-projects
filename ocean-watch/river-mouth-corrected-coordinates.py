@@ -8,6 +8,7 @@ import dateutil.relativedelta
 import requests
 import xml.etree.ElementTree as ET
 import math
+import time
 
 import pandas as pd
 
@@ -163,37 +164,12 @@ def build_test_coords(x, y, dir=0, step=1, step_size=0.2):
             step_size: size of each step, in degrees (numeric)
     RETURN  coords: long/lat coordinates for test point (numeric tuple)
     '''
-    root_two = math.sqrt(2)
-    if(dir==0):
-        test_x = x + (step_size * step)
-        test_y = y
-    elif(dir==45):
-        test_x = x + (step_size * step / root_two)
-        test_y = y + (step_size * step / root_two)
-    elif(dir==90):
-        test_x = x
-        test_y = y + (step_size * step)
-    elif(dir==135):
-        test_x = x - (step_size * step / root_two)
-        test_y = y + (step_size * step / root_two)
-    elif(dir==180):
-        test_x = x - (step_size * step)
-        test_y = y 
-    elif(dir==225):
-        test_x = x - (step_size * step / root_two)
-        test_y = y - (step_size * step / root_two)
-    elif(dir==270):
-        test_x = x 
-        test_y = y - (step_size * step)
-    elif(dir==315):
-        test_x = x + (step_size * step / root_two)
-        test_y = y - (step_size * step / root_two)
-    else:
-        raise ValueError('Illegal argument for direction: '+dir+'. Must be E/N/W/S')
+    test_x = x + (math.cos(math.radians(dir)) * step_size * step)
+    test_y = y + (math.sin(math.radians(dir)) * step_size * step)
     return (test_x, test_y)
         
 
-def build_test_sequence(x, y, step_size=0.1, n_steps=4):
+def build_test_sequence(x, y, step_size=0.1, n_steps=4, dirs='ordinal'):
     '''
     Create sequence of test coordinates to perform crude search for valid location
     closest to original point
@@ -202,9 +178,15 @@ def build_test_sequence(x, y, step_size=0.1, n_steps=4):
             step_size: size of each step, in degrees (numeric)
             n_steps: number of steps to include in sequence, where each step
                 represents a larger concentric circle around original point
+            dirs: set of directions to incorporate within sequence (string)
     RETURN  test_seq: test sequence of long/lat coordinates for testing (list of numeric tuples)
     '''
-    dirs = [0, 45, 90, 135, 180, 225, 270, 315]
+    if dirs.lower()=='cardinal':
+        dirs = [0, 90, 180, 270]
+    elif dirs.lower()=='ordinal':
+        dirs = [0, 45, 90, 135, 180, 225, 270, 315]
+    elif dirs.lower()=='secondary':
+        dirs = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5]
     test_coords = []
     for step in range(1, n_steps+1):
         for dir in dirs:
@@ -212,23 +194,26 @@ def build_test_sequence(x, y, step_size=0.1, n_steps=4):
     return test_coords
 
 # pull data
-gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
+gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
 
-test_existing_valid_coords = True
+test_existing_valid_coords = False
 valid_rows = []
 matching_rows = []
 updated_rows = []
 helpless_rows = []
 n_requests = 0
+n_fixed = 0
 
 for index, row in gdf_mouths.iterrows():
-    if index < 500:
+    if index < 0:
         # manual control over looping for interrupted runs
         continue
     x_valid = row['x_valid']
     y_valid = row['y_valid']
-    if x_valid is not None and y_valid is not None and test_existing_valid_coords:
-        valid_req = build_wms_request(x_valid, y_valid, variables[0], depths[0])
+    if x_valid is not None and y_valid is not None:
+        if not test_existing_valid_coords:
+            continue
+        valid_req = build_wms_request(float(x_valid), float(y_valid), variables[0], depths[0])
         valid_resp = requests.get(valid_req)
         df_valid = parse_response(valid_resp)
         if df_valid is None:
@@ -254,12 +239,17 @@ for index, row in gdf_mouths.iterrows():
     else:
         # query failed, need to find valid coordinates
         found = False
-        test_seq = build_test_sequence(x, y, n_steps=5)
+        test_seq = build_test_sequence(x, y, n_steps=7, dirs='secondary')
         for test_coords in test_seq:
             x_test = test_coords[0]
             y_test = test_coords[1]
             test_req = build_wms_request(x_test, y_test, variables[0], depths[0])
-            test_resp = requests.get(test_req)
+            try:
+                test_resp = requests.get(test_req)
+            except ConnectionError as e:
+                print(e)
+                time.sleep(180)
+                continue
             n_requests += 1
             df_test = parse_response(test_resp)
             if df_test is not None:
@@ -268,6 +258,11 @@ for index, row in gdf_mouths.iterrows():
                 gdf_mouths.loc[index, 'y_valid'] = y_test
                 updated_rows.append(row['hyriv_id'])
                 found = True
+                n_fixed += 1
+                if n_fixed > 20:
+                    to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
+                    print('Index of last repair: ' + str(index))
+                    n_fixed = 0
                 break
         if not found:
             print('Unable to find valid point for base river mouth: HYRIV_ID=' +
