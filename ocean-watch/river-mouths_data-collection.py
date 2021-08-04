@@ -85,6 +85,7 @@ def build_wms_request(x, y, variable, depth):
     return req_template.format(variable=variable, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, 
         depth=depth, date_end=date_end)
 
+# print(example_resp.content)
 def parse_response(response):
     '''
     Parse content of response from GetFeatureInfo query to Copernicus WMS
@@ -147,7 +148,7 @@ test_resp = requests.get(test_req)
 df_test = parse_response(test_resp)
 
 # pull data
-gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
+gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
 df_cmems = None
 
 for index, row in gdf_mouths.iterrows():
@@ -157,7 +158,7 @@ for index, row in gdf_mouths.iterrows():
     if x is None or y is None:
         # corrected coordinates have not been set
         print('No valid coordinates for processed river mouth: HYRIV_ID='+hyriv_id)
-    
+        continue
     for variable in variables:
         for depth in depths:
             req = build_wms_request(x, y, variable, depth)
