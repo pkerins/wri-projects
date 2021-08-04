@@ -8,6 +8,7 @@ import dateutil.relativedelta
 import requests
 import xml.etree.ElementTree as ET
 import math
+import concurrent.futures
 
 import pandas as pd
 
@@ -136,41 +137,52 @@ def parse_response(response):
     df_resp['value'] = response_data_values
     return df_resp
 
+def pull_data(row, variable, depth):
+    if row['x_valid'] is None or row['y_valid'] is None:
+        # corrected coordinates have not been set
+        print('No valid coordinates for processed river mouth: HYRIV_ID='+hyriv_id)
+        return None
+    hyriv_id = row['hyriv_id']
+    x, y = float(row['x_valid']), float(row['y_valid'])
+    req = build_wms_request(x, y, variable, depth)
+    resp = requests.get(req)
+    df_resp = parse_response(resp)
+    if df_resp is None:
+        raise Exception('Invalid response to supposedly valid location: HYRIV_ID='+hyriv_id)
+    df_resp['hyriv_id'] = hyriv_id
+    df_resp['variable'] = variable
+    df_resp['depth'] = depth
+    return df_resp
+
 # # known-to-work query drawn from copernicus website (pretty viewer)
 # example_req = 'https://nrt.cmems-du.eu/thredds/wms/global-analysis-forecast-bio-001-028-monthly?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&QUERY_LAYERS=o2&BBOX=-39.04,-13.92,-39.0399999,-13.9199999&HEIGHT=1&WIDTH=1&INFO_FORMAT=text/xml&SRS=EPSG:4326&X=0&Y=0&elevation=-0.49402499198913574&time=2019-01-16T12:00:00.000Z/2021-05-16T12:00:00.000Z'
 # print(example_req)
 # example_resp = requests.get(example_req)
 # df_example = parse_response(example_resp)
 
-test_req = build_wms_request(-39.04,-13.92,'o2',depths[0])
-print(test_req)
-test_resp = requests.get(test_req)
-df_test = parse_response(test_resp)
+# test_req = build_wms_request(-39.04,-13.92,'o2',depths[0])
+# print(test_req)
+# test_resp = requests.get(test_req)
+# df_test = parse_response(test_resp)
 
 # pull data
 gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
 df_cmems = None
 
-for index, row in gdf_mouths.iterrows():
-    # say we have our x and y
-    x, y = row['x_valid'], row['y_valid']
-    hyriv_id = row['hyriv_id']
-    if x is None or y is None:
-        # corrected coordinates have not been set
-        print('No valid coordinates for processed river mouth: HYRIV_ID='+hyriv_id)
-        continue
-    for variable in variables:
-        for depth in depths:
-            req = build_wms_request(x, y, variable, depth)
-            resp = requests.get(req)
-            df_resp = parse_response(resp)
-            if df_resp is None:
-                raise Exception('Invalid response to supposedly valid location: HYRIV_ID='+hyriv_id)
-            df_resp['hyriv_id'] = [hyriv_id for i in range(len(df_resp))]
-            if df_cmems is None:
-                df_cmems = df_resp.copy()
-            else:
-                df_cmems = df_cmems.append(df_resp, ignore_index=True, sort=False,)
-            break
+
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    futures = []
+    for index, row in gdf_mouths.iterrows():
+        if index < 0:
+            # manual control over looping for interrupted runs
+            continue
+        for variable in variables:
+            for depth in depths:
+                futures.append(executor.submit(pull_data, row, variable, depth))
+        # for future in concurrent.futures.as_completed(futures):
+        #     print(future.result())
+    results = [future.result() for future in futures]
+    df_all = pd.concat([result for result in results if result])
 
 to_carto(df_cmems, 'ocn_calcs_011_river_mouth_chemical_concentrations', if_exists='replace')
