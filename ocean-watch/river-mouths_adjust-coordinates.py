@@ -194,7 +194,7 @@ def build_test_sequence(x, y, step_size=0.1, n_steps=4, dirs='ordinal'):
     return test_coords
 
 # pull data
-gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
+gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
 
 test_existing_valid_coords = False
 valid_rows = []
@@ -248,7 +248,7 @@ for index, row in gdf_mouths.iterrows():
                 test_resp = requests.get(test_req)
             except ConnectionError as e:
                 print(e)
-                time.sleep(180)
+                time.sleep(120)
                 continue
             n_requests += 1
             df_test = parse_response(test_resp)
@@ -259,7 +259,7 @@ for index, row in gdf_mouths.iterrows():
                 updated_rows.append(row['hyriv_id'])
                 found = True
                 n_fixed += 1
-                if n_fixed > 20:
+                if n_fixed > 12:
                     to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
                     print('Index of last repair: ' + str(index))
                     n_fixed = 0
@@ -276,5 +276,4 @@ for index, row in gdf_mouths.iterrows():
 print(n_requests)    
 print(gdf_mouths)
 
-to_carto(gdf_mouths, 'ocn_calcs_010test_target_river_mouths', if_exists='replace')
-print ('end of script')
+to_carto(gdf_mouths, 'ocn_calcs_010_target_river_mouths', if_exists='replace')

@@ -140,7 +140,7 @@ def parse_response(response):
 def pull_data(row, variable, depth):
     if row['x_valid'] is None or row['y_valid'] is None:
         # corrected coordinates have not been set
-        print('No valid coordinates for processed river mouth: HYRIV_ID='+hyriv_id)
+        # print('No valid coordinates for processed river mouth: HYRIV_ID='+hyriv_id)
         return None
     hyriv_id = row['hyriv_id']
     x, y = float(row['x_valid']), float(row['y_valid'])
@@ -154,22 +154,7 @@ def pull_data(row, variable, depth):
     df_resp['depth'] = depth
     return df_resp
 
-# # known-to-work query drawn from copernicus website (pretty viewer)
-# example_req = 'https://nrt.cmems-du.eu/thredds/wms/global-analysis-forecast-bio-001-028-monthly?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetFeatureInfo&QUERY_LAYERS=o2&BBOX=-39.04,-13.92,-39.0399999,-13.9199999&HEIGHT=1&WIDTH=1&INFO_FORMAT=text/xml&SRS=EPSG:4326&X=0&Y=0&elevation=-0.49402499198913574&time=2019-01-16T12:00:00.000Z/2021-05-16T12:00:00.000Z'
-# print(example_req)
-# example_resp = requests.get(example_req)
-# df_example = parse_response(example_resp)
-
-# test_req = build_wms_request(-39.04,-13.92,'o2',depths[0])
-# print(test_req)
-# test_resp = requests.get(test_req)
-# df_test = parse_response(test_resp)
-
-# pull data
 gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
-df_cmems = None
-
-
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
     futures = []
@@ -184,5 +169,6 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         #     print(future.result())
     results = [future.result() for future in futures]
     df_all = pd.concat([result for result in results if result])
+    # extract level 3 basin identifier!
 
-to_carto(df_cmems, 'ocn_calcs_011_river_mouth_chemical_concentrations', if_exists='replace')
+to_carto(df_all, 'ocn_calcs_011_river_mouth_chemical_concentrations', if_exists='replace')
