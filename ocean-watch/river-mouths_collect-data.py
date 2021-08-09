@@ -55,7 +55,6 @@ depths = [
 ]
 
 # define function for creating request
-
 def build_wms_request(x, y, variable, depth):
     xmin = x-0.0
     ymin = y-0.0
@@ -86,12 +85,11 @@ def build_wms_request(x, y, variable, depth):
     return req_template.format(variable=variable, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, 
         depth=depth, date_end=date_end)
 
-# print(example_resp.content)
 def parse_response(response):
     '''
     Parse content of response from GetFeatureInfo query to Copernicus WMS
     INPUT   response: raw response object from requests library (requests.models.Response)
-    RETURN  df_resp: structured data object for response (DataFrame)
+    RETURN  df_resp: structured data object for response; None if unable to parse (DataFrame)
     '''
     if response.status_code != 200:
         return None
@@ -150,12 +148,20 @@ def pull_data(row, variable, depth):
     if df_resp is None:
         raise Exception('Invalid response to supposedly valid location: HYRIV_ID='+hyriv_id)
     df_resp['hyriv_id'] = hyriv_id
+    df_resp['pfaf_id_12'] = row['pfaf_id_12']
+    df_resp['hybas_id_6'] = row['hybas_id_6']
+    df_resp['hybas_id_3'] = row['hybas_id_3']
     df_resp['variable'] = variable
     df_resp['depth'] = depth
+    cols_reorder = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','variable','depth',
+            'hyriv_id','pfaf_id_12','hybas_id_6','hybas_id_3']
+    df_resp = df_resp[cols_reorder]
     return df_resp
 
-gdf_mouths = read_carto('ocn_calcs_010test_target_river_mouths')
+# pull river mouth dataset for making requests
+gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
 
+# request all records for all permutations, combine into single dataframe
 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
     futures = []
     for index, row in gdf_mouths.iterrows():
@@ -168,7 +174,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         # for future in concurrent.futures.as_completed(futures):
         #     print(future.result())
     results = [future.result() for future in futures]
-    df_all = pd.concat([result for result in results if result])
-    # extract level 3 basin identifier!
+    df_all = pd.concat([result for result in results if result is not None])
 
-to_carto(df_all, 'ocn_calcs_011_river_mouth_chemical_concentrations', if_exists='replace')
+# persist dataframe on carto
+to_carto(df_all, dataset_name, if_exists='replace')
