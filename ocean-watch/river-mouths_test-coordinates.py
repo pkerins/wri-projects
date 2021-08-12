@@ -27,10 +27,6 @@ console = logging.StreamHandler()
 logger.addHandler(console)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# name of table on Carto where you want to upload data
-# this should be a table name that is not currently in use
-dataset_name = 'ocn_020alt_chemical_concentrations'
-
 logger.debug('Authenticate Carto credentials')
 CARTO_USER = os.getenv('CARTO_WRI_RW_USER')
 CARTO_KEY = os.getenv('CARTO_WRI_RW_KEY')
@@ -163,46 +159,17 @@ logger.info('Initiate multithreading for WMS requests')
 # request all records for all permutations, combine into single dataframe
 with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
     args_list = []
-    args_pending = []
-    logger.debug('Build request arguments')
     for index, row in gdf_mouths.iterrows():
-        # # manual control over looping for interrupted runs
-        # if index < 0:
-        #     continue
-        # if index > 100:
-        #     break
-        if row['x_valid'] is None or row['y_valid'] is None:
-            continue
-        for variable in variables:
-            for depth in depths:
-                args_list.append([index, row, variable, depth])
-                # if index == 0:
-                #     print([index, variable, depth])
-    args_pending = args_list.copy()
-    logger.debug('Begin request submission loop')
-    while(args_pending): # if list not empty
-        args_try = args_pending.copy()
-        args_pending = []
-        logger.debug('Create Futures for outstanding requests')
-        future_to_args = {executor.submit(pull_data, args[1], args[2], args[3]): args for args in args_try}
-        for future in concurrent.futures.as_completed(future_to_args):
-            args = future_to_args[future]
-            try:
-                results.append(future.result())
-                # print('completed', args)
-                if args[0] % 100 == 0 and args[2]==variables[-1] and args[3]==depths[-1]:
-                    print('completed request: idx#'+str(args[0])+': '+str(args[2])+' at -'+str(args[3])+'m')
-            except ConnectionError as e:
-                print('Failed request: ' + str(args))
-                print(e)
-                args_pending.append(args)
-            except Exception as e:
-                raise e
-logger.debug('Construct DataFrame from full set of responses')
-df_all = pd.concat([result for result in results if result is not None],
-        axis=0, ignore_index=True)
-df_all.sort_values(['hyriv_id','variable','dt','depth'],
-        axis=0, ascending=True, inplace=True, ignore_index=True)
-
-logger.debug('Persist DataFrame to Carto')
-to_carto(df_all, dataset_name, if_exists='replace')
+        args_list.append([index, row, variables[-1], depths[-1]])
+    future_to_args = {executor.submit(pull_data, args[1], args[2], args[3]): args for args in args_list}
+    for future in concurrent.futures.as_completed(future_to_args):
+        args = future_to_args[future]
+        try:
+            future.result()
+            if args[0] % 100 == 0 and args[2]==variables[-1] and args[3]==depths[-1]:
+                print('completed request: idx#'+str(args[0])+': '+str(args[2])+' at -'+str(args[3])+'m')
+        except ValueError as e:
+            # print('Failed request: idx#'+str(args[0])+', ')
+            print(e)
+        except Exception as e:
+            raise e
