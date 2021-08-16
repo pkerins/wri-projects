@@ -21,7 +21,7 @@ import sys
 logger = logging.getLogger()
 for handler in logger.handlers: logger.removeHandler(handler)
 # manually set level 
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 # print to console
 console = logging.StreamHandler()
 logger.addHandler(console)
@@ -150,7 +150,7 @@ def pull_data(row, variable, depth):
     df_resp['hybas_id_3'] = row['hybas_id_3']
     df_resp['variable'] = variable
     df_resp['depth'] = depth
-    cols_reorder = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','variable','depth',
+    cols_reorder = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','variable','depth','value',
             'hyriv_id','pfaf_id_12','hybas_id_6','hybas_id_3']
     df_resp = df_resp[cols_reorder]
     return df_resp
@@ -161,7 +161,7 @@ gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
 results = []
 logger.info('Initiate multithreading for WMS requests')
 # request all records for all permutations, combine into single dataframe
-with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
     args_list = []
     args_pending = []
     logger.debug('Build request arguments')
@@ -183,7 +183,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
     while(args_pending): # if list not empty
         args_try = args_pending.copy()
         args_pending = []
-        logger.debug('Create Futures for outstanding requests')
+        logger.debug('Create Futures for outstanding requests ('+str(len(args_try))+')')
         future_to_args = {executor.submit(pull_data, args[1], args[2], args[3]): args for args in args_try}
         for future in concurrent.futures.as_completed(future_to_args):
             args = future_to_args[future]
@@ -191,17 +191,18 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
                 results.append(future.result())
                 # print('completed', args)
                 if args[0] % 100 == 0 and args[2]==variables[-1] and args[3]==depths[-1]:
-                    print('completed request: idx#'+str(args[0])+': '+str(args[2])+' at -'+str(args[3])+'m')
+                    print('successful request for idx#'+str(args[0])+' at '+str(datetime.now()))
             except ConnectionError as e:
-                print('Failed request: ' + str(args))
                 print(e)
                 args_pending.append(args)
             except Exception as e:
-                raise e
+                print(e)
+                args_pending.append(args)
+        logger.debug('Futures completed')
 logger.debug('Construct DataFrame from full set of responses')
 df_all = pd.concat([result for result in results if result is not None],
         axis=0, ignore_index=True)
-df_all.sort_values(['hyriv_id','variable','dt','depth'],
+df_all.sort_values(['hyriv_id','variable','depth','dt'],
         axis=0, ascending=True, inplace=True, ignore_index=True)
 
 logger.debug('Persist DataFrame to Carto')
