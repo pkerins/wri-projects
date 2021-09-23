@@ -2,6 +2,7 @@ import logging
 from cartoframes.auth import set_default_credentials
 from cartoframes import read_carto, to_carto
 import pandas as pd
+from pandas.errors import EmptyDataError
 import geopandas as gpd
 from datetime import date
 from pprint import pprint
@@ -73,7 +74,7 @@ eez_table = 'com_011_rw1_maritime_boundaries_edit'
 # '12NM', '24NM', '200NM', 'Overlapping claim', 'Joint regime'
 # the final three are of potential relevance here
 # collect the data for them all, but maintain the distinction for later ease
-gdf_zones = read_carto("SELECT * FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('200NM', 'Overlapping claim', 'Joint regime')",
+gdf_zones = read_carto("SELECT *, ST_AsGeoJSON(the_geom) AS the_geom_geojson FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('200NM','Joint regime','Overlapping claim') LIMIT 1",
         index_col='cartodb_id')
 gdf_zones = gdf_zones.astype({'mrgid':'int','mrgid_ter1':'int','mrgid_sov1':'int',
         'mrgid_eez':'int',})
@@ -84,9 +85,17 @@ date_pairs = [(date(year,1,1), date(year+1,1,1)) for year in range(2012, 2022)]
 
 # create object to track api activity & results
 # mrgid, geoname, year, id, url, zip, csv, value
+# needed from original table: geoname, pol_type, iso_ter1, iso_sov1, iso_ter2, iso_sov2, iso_ter3, iso_sov3
 col_type_dict = {
     'mrgid':'int',
     'geoname':'str',
+    'pol_type':'str',
+    'iso_ter1':'str',
+    'iso_sov1':'str',
+    'iso_ter2':'str',
+    'iso_sov2':'str',
+    'iso_ter3':'str',
+    'iso_sov3':'str',
     'year':'int',
     'id':'str',
     'url':'str',
@@ -97,7 +106,33 @@ col_type_dict = {
 df_reports = pd.DataFrame({c: pd.Series(dtype=t) for c, t in col_type_dict.items()})
 
 logger.info('Define functions for submitting API requests and handling responses')
-def build_req_data(report_name, date_pair, json_str,  
+def build_req_data_postgis_json(report_name, date_pair, geom_geojson,  
+        value=None, geoname=None, mrgid=None, gfw_id=None):
+    # construct data object
+    req_data = {}
+    req_data['name'] = report_name
+    req_data['geometry'] = {}
+    req_data['geometry']['type'] = 'MultiPolygon'
+    req_data['geometry']['properties'] = {}
+    if value is not None: req_data['geometry']['properties']['value'] = value
+    if geoname is not None: req_data['geometry']['properties']['geoname'] = geoname
+    if mrgid is not None: req_data['geometry']['properties']['mrgid'] = mrgid
+    if gfw_id is not None: req_data['geometry']['properties']['gfw_id'] = gfw_id
+    json_dict = json.loads(geom_geojson)
+    # if len(json_dict['features']) > 1: 
+    #     print('warning')
+        # raise Exception('not sure if we want this or will encounter')
+    req_data['geometry']['geometry'] = json_dict
+    # req_data['geometry']['geometry'] = json_dict['features'][0]['geometry']
+    req_data['type'] = 'detail'
+    req_data['timeGroup'] = 'none'
+    req_data['filters'] = ['']
+    req_data['datasets'] = ['public-global-fishing-tracks:latest']
+    date_format = '%Y-%m-%d'
+    req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
+    return req_data
+
+def build_req_data_pandas_json(report_name, date_pair, geom_geojson,  
         value=None, geoname=None, mrgid=None, gfw_id=None):
     # construct data object
     req_data = {}
@@ -109,10 +144,11 @@ def build_req_data(report_name, date_pair, json_str,
     if geoname is not None: req_data['geometry']['properties']['geoname'] = geoname
     if mrgid is not None: req_data['geometry']['properties']['mrgid'] = mrgid
     if gfw_id is not None: req_data['geometry']['properties']['gfw_id'] = gfw_id
-    json_dict = json.loads(json_str)
-    if len(json_dict['features']) > 1: 
-        print('warning')
+    json_dict = json.loads(geom_geojson)
+    # if len(json_dict['features']) > 1: 
+    #     print('warning')
         # raise Exception('not sure if we want this or will encounter')
+    # req_data['geometry']['geometry'] = json_dict
     req_data['geometry']['geometry'] = json_dict['features'][0]['geometry']
     req_data['type'] = 'detail'
     req_data['timeGroup'] = 'none'
@@ -122,28 +158,48 @@ def build_req_data(report_name, date_pair, json_str,
     req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
     return req_data
 
-def build_req_data_from_row(report_name, date_pair, row):
-    return build_req_data(report_name, date_pair, row.json, 
-        value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
-
 logger.info('Initiate report generation for all times and places')
 report_name_template = 'Total Observed Fishing Effort in {}, {}'
-for index, row in gdf_zones.iterrows():
+for i in range (0, len(gdf_zones)):
+    row = gdf_zones.iloc[i]
+# for index, row in gdf_zones.iterrows():
     logger.debug('Request reports for zone: ' + row.geoname)
     for date_pair in date_pairs:
         # print(row['geoname'], date_pair[0].strftime('%Y-%m-%d'))
         report_name = report_name_template.format(row.geoname, date_pair[0].year)
-        req_data = build_req_data_from_row(report_name, date_pair, row)
+        # req_data = build_req_data_from_row(report_name, date_pair, row)
+        req_data_postgis = build_req_data_postgis_json(report_name, date_pair, row.the_geom_geojson, 
+                value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
+        req_data_pandas = build_req_data_pandas_json(report_name, date_pair, row.json, 
+                value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
+        # with open(os.path.join(WORKING_DIR, 'postgis.json'), 'w', encoding='utf-8') as f:
+        #     json.dump(req_data_postgis, f, ensure_ascii=False, indent=4)
+        # with open(os.path.join(WORKING_DIR, 'pandas.json'), 'w', encoding='utf-8') as f:
+        #     json.dump(req_data_pandas, f, ensure_ascii=False, indent=4)
+
         # req_data['geometry']['geometry'] = None
         # pprint(req_data)
-        r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data))
-        r.raise_for_status()
+        try:
+            r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data_postgis))
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as err:
+            logger.debug('HTTPError making POST request for row #'+str(i))
+            logger.debug(str(err))
+            break
         resp_body = r.json()
-        # mrgid, geoname, year, id, url, zip, csv, value
         df_reports.loc[len(df_reports.index)] = [
-            row.mrgid, row.geoname, date_pair[0].year, resp_body['id'], None, None, None, None,
+            row.mrgid, row.geoname, row.pol_type,
+            row.iso_ter1, row.iso_sov1, row.iso_ter2, row.iso_sov2, row.iso_ter3, row.iso_sov3, 
+            date_pair[0].year, resp_body['id'], None, None, None, None,
         ]
-        time.sleep(3)
+        time.sleep(1)
+        
+        # break
+    # break
+    else:
+        i = i - 1
+        continue
+
 
 time.sleep(5)
 
@@ -158,6 +214,7 @@ for index, row in df_reports.iterrows():
     df_reports.loc[index, 'zip'] = zip
     urllib.request.urlretrieve(url, zip)
     time.sleep(1)
+    # break
 
 logger.info('Unzip and organize retrieved data')
 for index, row in df_reports.iterrows():
@@ -167,16 +224,23 @@ for index, row in df_reports.iterrows():
             if f.endswith('.csv'):
                 zip_ref.extract(f, path=WORKING_DIR)
                 unzipped_csv = os.path.join(WORKING_DIR, f)
-                renamed_csv = os.path.join(WORKING_DIR, row.geoname.replace(' ','-')+'_'+str(row.year)+'.csv')
+                renamed_csv = os.path.join(WORKING_DIR, row.geoname.replace(' ','-').replace('/','|')+'_'+str(row.year)+'.csv')
                 os.rename(unzipped_csv, renamed_csv)
                 df_reports.loc[index, 'csv'] = renamed_csv
-                break
+                # break
+    # break
 
 logger.info('Load data, calculate statistics, and record results')
 for index, row in df_reports.iterrows():
-    df_entry = pd.read_csv(row.csv)
+    try:
+        df_entry = pd.read_csv(row.csv)
+    except EmptyDataError as e:
+        logger.debug('No fishing records for ' + row.geoname + ' in ' + str(row.year))
+        df_reports.loc[index, 'value'] = 0
+        continue
     sum = df_entry['Fishing hours'].sum()
     df_reports.loc[index, 'value'] = sum
+    # break
 
 logger.info('Store results locally and upload them to Carto')
 
