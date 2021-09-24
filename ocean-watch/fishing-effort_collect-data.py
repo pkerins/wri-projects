@@ -75,7 +75,7 @@ eez_table = 'com_011_rw1_maritime_boundaries_edit'
 # '12NM', '24NM', '200NM', 'Overlapping claim', 'Joint regime'
 # the final three are of potential relevance here
 # collect the data for them all, but maintain the distinction for later ease
-gdf_zones = read_carto("SELECT *, ST_AsGeoJSON(the_geom) AS the_geom_geojson FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('Overlapping claim','200NM','Joint regime') AND mrgid = 8466",
+gdf_zones = read_carto("SELECT *, ST_AsGeoJSON(the_geom) AS the_geom_geojson FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('Overlapping claim','200NM','Joint regime')",
         index_col='cartodb_id')
 gdf_zones = gdf_zones.astype({'mrgid':'int','mrgid_ter1':'int','mrgid_sov1':'int',
         'mrgid_eez':'int',})
