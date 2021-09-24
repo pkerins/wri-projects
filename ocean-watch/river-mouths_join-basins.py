@@ -48,12 +48,14 @@ local_data_dir = '/mnt/c/Users/PKerins.local/data/ocean-watch/hydrosheds'
 region_ids = ['af','ar','as', 'au','eu','gr','na','sa','si']
 zip_file_template = os.path.join(local_data_dir, 'hybas_{}_lev12_v1c.zip')
 shp_file_template = os.path.join(local_data_dir, 'hybas_{}_lev12_v1c.shp')
+
 for region_id in region_ids:
     if os.path.isfile(shp_file_template.format(region_id)):
         continue
     zip_file = zip_file_template.format(region_id)
     with zipfile.ZipFile(zip_file, 'r') as zip:
         zip.extractall(local_data_dir) 
+
 gdf_l12 = None   
 for region_id in region_ids:
     shp_file = shp_file_template.format(region_id)
@@ -67,7 +69,7 @@ gdf_l12 = gdf_l12.astype({'HYBAS_ID':'str','PFAF_ID':'str'})
 # load processed river mouth dataset
 gdf_mouths = read_carto('ocn_calcs_010_target_river_mouths')
 if 'pfaf_id_12' in gdf_mouths.columns:
-    gdf_mouths.drop(columns=['pfaf_id_12','pfaf_id_6','pfaf_id_3','hybas_id_6','hybas_id_3'], inplace=True, errors='ignore')
+    gdf_mouths.drop(columns=['pfaf_id_12','pfaf_id_5','pfaf_id_3','hybas_id_5','hybas_id_3'], inplace=True, errors='ignore')
 
 # join level12 river basin data to river mouth data
 # allows us to get the pfaf_id for each terminal river mouth level 12 basin
@@ -78,12 +80,12 @@ gdf_mouths.drop(columns=['HYBAS_ID', 'NEXT_DOWN',
        'UP_AREA', 'ENDO', 'COAST', 'ORDER', 'SORT'], inplace=True, errors='raise')
 gdf_mouths.rename(columns={'PFAF_ID': 'pfaf_id_12'}, inplace=True, errors='raise')
 
-# use level 12 basin pfaf_id to find the corresponding level 6 basin
-gdf_mouths['pfaf_id_6'] = gdf_mouths['pfaf_id_12'].str.slice(stop=6)
-gdf_l6 = read_carto("SELECT hybas_id::text, pfaf_id::text FROM wat_068_rw0_watersheds_edit WHERE level=6")
-gdf_mouths = gdf_mouths.merge(gdf_l6, how='left', left_on='pfaf_id_6', right_on='pfaf_id', 
+# use level 12 basin pfaf_id to find the corresponding level 5 basin
+gdf_mouths['pfaf_id_5'] = gdf_mouths['pfaf_id_12'].str.slice(stop=5)
+gdf_l5 = read_carto("SELECT hybas_id::text, pfaf_id::text FROM wat_068_rw0_watersheds_edit WHERE level=5")
+gdf_mouths = gdf_mouths.merge(gdf_l5, how='left', left_on='pfaf_id_5', right_on='pfaf_id', 
         sort=False)
-gdf_mouths.rename(columns={'hybas_id':'hybas_id_6'}, inplace=True, errors='raise')
+gdf_mouths.rename(columns={'hybas_id':'hybas_id_5'}, inplace=True, errors='raise')
 gdf_mouths.drop(columns=['pfaf_id'], inplace=True, errors='raise')
 
 # use level 12 basin pfaf_id to find the corresponding level 3 basin
@@ -92,8 +94,8 @@ gdf_l3 = read_carto("SELECT hybas_id::text, pfaf_id::text FROM wat_068_rw0_water
 gdf_mouths = gdf_mouths.merge(gdf_l3, how='left', left_on='pfaf_id_3', right_on='pfaf_id', 
         sort=False)
 gdf_mouths.rename(columns={'hybas_id':'hybas_id_3'}, inplace=True, errors='raise')
-gdf_mouths.drop(columns=['pfaf_id','pfaf_id_6','pfaf_id_3'], inplace=True, errors='raise')
+gdf_mouths.drop(columns=['pfaf_id','pfaf_id_5','pfaf_id_3'], inplace=True, errors='raise')
 
 # store enriched version of river mouth dataset with basin identifiers for
-# level 12, 6, and 3 basins corresponding to river outlet
+# level 12, 5, and 3 basins corresponding to river outlet
 to_carto(gdf_mouths, 'ocn_calcs_010_target_river_mouths', if_exists='replace')

@@ -146,12 +146,13 @@ def pull_data(row, variable, depth):
         raise ValueError('Invalid response to supposedly valid location: HYRIV_ID='+hyriv_id)
     df_resp['hyriv_id'] = hyriv_id
     df_resp['pfaf_id_12'] = row['pfaf_id_12']
-    df_resp['hybas_id_6'] = row['hybas_id_6']
+    df_resp['hybas_id_5'] = row['hybas_id_5']
     df_resp['hybas_id_3'] = row['hybas_id_3']
+    df_resp['ord_flow'] = row['ord_flow']
     df_resp['variable'] = variable
     df_resp['depth'] = depth
     cols_reorder = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','variable','depth','value',
-            'hyriv_id','pfaf_id_12','hybas_id_6','hybas_id_3']
+            'hyriv_id','pfaf_id_12','hybas_id_5','hybas_id_3','ord_flow']
     df_resp = df_resp[cols_reorder]
     return df_resp
 
@@ -164,7 +165,7 @@ logger.info('Initiate multithreading for WMS requests')
 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
     args_list = []
     args_pending = []
-    logger.debug('Build request arguments')
+    logger.info('Build request arguments')
     for index, row in gdf_mouths.iterrows():
         # # manual control over looping for interrupted runs
         # if index < 0:
@@ -179,7 +180,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 # if index == 0:
                 #     print([index, variable, depth])
     args_pending = args_list.copy()
-    logger.debug('Begin request submission loop')
+    logger.info('Begin request submission loop')
     while(args_pending): # if list not empty
         args_try = args_pending.copy()
         args_pending = []
@@ -199,11 +200,11 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 print(e)
                 args_pending.append(args)
         logger.debug('Futures completed')
-logger.debug('Construct DataFrame from full set of responses')
+logger.info('Construct DataFrame from full set of responses')
 df_all = pd.concat([result for result in results if result is not None],
         axis=0, ignore_index=True)
 df_all.sort_values(['hyriv_id','variable','depth','dt'],
         axis=0, ascending=True, inplace=True, ignore_index=True)
 
-logger.debug('Persist DataFrame to Carto')
+logger.info('Persist DataFrame to Carto')
 to_carto(df_all, dataset_name, if_exists='replace')
