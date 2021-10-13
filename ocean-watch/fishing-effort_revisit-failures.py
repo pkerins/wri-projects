@@ -139,7 +139,7 @@ def build_req_data_postgis_json(report_name, date_pair, geom_geojson,
     req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
     return req_data
 
-df_combined = df_combined[(df_combined['mrgid'] == 8364)].head(1)
+# df_combined = df_combined[(df_combined['mrgid'] == 8364)].head(1)
 
 logger.info('Initiate report generation for previously attempted and failed zone/year combinations')
 report_name_template = 'Total Observed Fishing Effort in {}, {}'
@@ -158,7 +158,7 @@ for index, row in df_combined.iterrows():
     #     json.dump(req_data_pandas, f, ensure_ascii=False, indent=4)
 
     # req_data['geometry']['geometry'] = None
-    pprint(req_data_postgis)
+    # pprint(req_data_postgis)
     r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data_postgis))
     try:
         r.raise_for_status()
@@ -244,6 +244,6 @@ with contextlib.suppress(FileNotFoundError):
     os.remove(reports_csv)
 df_combined.to_csv(reports_csv, header=True, index=False, )
 
-record_index = ~df_combined['value'].isnull()
+record_index = pd.notnull(df_combined['value'])
 if len(record_index > 0):
     to_carto(df_combined[record_index], dataset_name, if_exists='append')
