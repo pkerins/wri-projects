@@ -5,6 +5,7 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 import geopandas as gpd
 from datetime import date
+from datetime import datetime
 from pprint import pprint
 import json
 import time
@@ -68,6 +69,20 @@ RETRIEVE_URL_HEADERS = {
 WORKING_DIR = os.path.join(os.getenv('DOWNLOAD_DIR'), 'gfw-api-data')
 Path(WORKING_DIR).mkdir(parents=True, exist_ok=True)
 
+logger.debug('Generate list of missing entries (zone-year pairs)')
+entries_table = dataset_name
+query_missing = (
+    "SELECT zone.mrgid, zone.geoname, zone.pol_type, zone.year, effort.value FROM ( "
+    "    SELECT zone.mrgid, zone.geoname, zone.pol_type, UNNEST(ARRAY[2012,2013,2014,2015,2016,2017,2018,2019,2020]) AS year "
+    "    FROM com_011_rw1_maritime_boundaries_edit zone "
+    "    WHERE zone.pol_type IN ('200NM','Overlapping claim','Joint regime')) AS zone "
+    "LEFT OUTER JOIN com_030d_fishing_effort_by_zone effort ON (zone.mrgid = effort.mrgid AND zone.year = effort.year) "
+    "WHERE effort.value IS NULL "
+    "ORDER BY geoname ASC, year ASC "
+)
+gdf_missing = read_carto(query_missing)
+print(len(gdf_missing))
+
 logger.debug('Retrieve polygons from Carto')
 # retrieve polygons from carto
 eez_table = 'com_011_rw1_maritime_boundaries_edit'
@@ -75,14 +90,22 @@ eez_table = 'com_011_rw1_maritime_boundaries_edit'
 # '12NM', '24NM', '200NM', 'Overlapping claim', 'Joint regime'
 # the final three are of potential relevance here
 # collect the data for them all, but maintain the distinction for later ease
-gdf_zones = read_carto("SELECT *, ST_AsGeoJSON(the_geom) AS the_geom_geojson FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('Overlapping claim','200NM','Joint regime') AND mrgid=8464",
+gdf_zones = read_carto("SELECT *, ST_AsGeoJSON(the_geom) AS the_geom_geojson FROM com_011_rw1_maritime_boundaries_edit WHERE pol_type IN ('Overlapping claim','200NM','Joint regime') ",
         index_col='cartodb_id')
 gdf_zones = gdf_zones.astype({'mrgid':'int','mrgid_ter1':'int','mrgid_sov1':'int',
         'mrgid_eez':'int',})
 gdf_zones['json'] = gdf_zones.the_geom.to_json()
 
-# create set of pairs of dates to loop through
-date_pairs = [(date(year,1,1), date(year,12,31)) for year in range(2012, 2022)]
+# combine these together to make a single dataframe from which all query info can be drawn
+
+df_combined = gdf_missing.merge(gdf_zones, how='inner', left_on='mrgid', right_on='mrgid',
+        suffixes=[None,'_zones'], validate='m:m')
+cols_keep = gdf_missing.columns.tolist()
+cols_keep.extend(['iso_ter1','iso_sov1','iso_ter2','iso_sov2','iso_ter3','iso_sov3','the_geom_geojson'])
+df_combined = df_combined[cols_keep]
+df_combined = df_combined.astype({'mrgid':'int'})
+
+del gdf_zones
 
 # create object to track api activity & results
 # mrgid, geoname, year, id, url, zip, csv, value
@@ -104,7 +127,7 @@ col_type_dict = {
     'csv':'str',
     'value':'float',
 }
-df_reports = pd.DataFrame({c: pd.Series(dtype=t) for c, t in col_type_dict.items()})
+df_attempts = pd.DataFrame({c: pd.Series(dtype=t) for c, t in col_type_dict.items()})
 
 logger.info('Define functions for submitting API requests and handling responses')
 def build_req_data_postgis_json(report_name, date_pair, geom_geojson,  
@@ -133,67 +156,71 @@ def build_req_data_postgis_json(report_name, date_pair, geom_geojson,
     req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
     return req_data
 
-logger.info('Initiate report generation for all times and places')
+logger.info('Initiate report generation for missing entries (zone-year pairs)')
 report_name_template = 'Total Observed Fishing Effort in {}, {}'
-for index, row in gdf_zones.iterrows():
-    logger.debug('Request reports for zone: ' + row.geoname)
-    for date_pair in date_pairs:
-        # print(row['geoname'], date_pair[0].strftime('%Y-%m-%d'))
-        report_name = report_name_template.format(row.geoname, date_pair[0].year)
-        # req_data = build_req_data_from_row(report_name, date_pair, row)
-        req_data_postgis = build_req_data_postgis_json(report_name, date_pair, row.the_geom_geojson, 
-                value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
-        # req_data_pandas = build_req_data_pandas_json(report_name, date_pair, row.json, 
-        #         value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
-        with open(os.path.join(WORKING_DIR, 'postgis.json'), 'w', encoding='utf-8') as f:
-            json.dump(req_data_postgis, f, ensure_ascii=False, indent=4)
-        # with open(os.path.join(WORKING_DIR, 'pandas.json'), 'w', encoding='utf-8') as f:
-        #     json.dump(req_data_pandas, f, ensure_ascii=False, indent=4)
+for index, row in df_combined.iterrows():
+    # shortcut to skip some unfulfillable requests
+    skip_list = [
+        8493, # canada
+        8492, # indonesia
+        8322, # philippines
+        5690, # russia
+    ]
+    if row.mrgid in skip_list:
+        logger.debug('Skipping '+row.geoname)
+        continue
+    logger.debug('Request reports for zone: ' + row.geoname + ', ' + str(row.year))
+    date_pair = (datetime.strptime(str(row.year)+'-01-01', '%Y-%m-%d'), datetime.strptime(str(row.year)+'-12-31', '%Y-%m-%d'))
+    report_name = report_name_template.format(row.geoname, date_pair[0].year)
 
-        # req_data['geometry']['geometry'] = None
-        # pprint(req_data)
-        r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data_postgis))
-        try:
-            r.raise_for_status()
-        except HTTPError as e:
-            logger.error('Failed report generation request for: ' + report_name)
-            resp_body = None
-        else:
-            resp_body = r.json()
-        finally:
-            df_reports.loc[len(df_reports.index)] = [
-                row.mrgid, row.geoname, row.pol_type,
-                row.iso_ter1, row.iso_sov1, row.iso_ter2, row.iso_sov2, row.iso_ter3, row.iso_sov3, 
-                date_pair[0].year, (None if resp_body is None else resp_body['id']), None, None, None, None,
-            ]
-            time.sleep(1)
-        # break
+    req_data_postgis = build_req_data_postgis_json(report_name, date_pair, row.the_geom_geojson, 
+            value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
+    with open(os.path.join(WORKING_DIR, 'postgis.json'), 'w', encoding='utf-8') as f:
+        json.dump(req_data_postgis, f, ensure_ascii=False, indent=4)
+
+    r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data_postgis))
+    try:
+        r.raise_for_status()
+    except HTTPError as e:
+        logger.error('Failed report generation request for: ' + report_name)
+        logger.error(e.response.text)
+        resp_body = None
+    else:
+        resp_body = r.json()
+    finally:
+        df_attempts.loc[len(df_attempts.index)] = [
+            row.mrgid, row.geoname, row.pol_type,
+            row.iso_ter1, row.iso_sov1, row.iso_ter2, row.iso_sov2, row.iso_ter3, row.iso_sov3, 
+            date_pair[0].year, (None if resp_body is None else resp_body['id']), None, None, None, None,
+        ]
+        time.sleep(5)
     # break
 
-time.sleep(30)
+time.sleep(120)
 
 logger.info('Retrieve report URLs and download results')
-for index, row in df_reports.iterrows():
-    if row.id is None:
+for index, row in df_attempts.iterrows():
+    if pd.isnull(row.id):
         continue
     try:
         r = requests.get(RETRIEVE_URL_ENDPOINT.format(row.id), headers=RETRIEVE_URL_HEADERS)
         r.raise_for_status()
     except HTTPError as e:
         logger.error('Failed report URL retrieval request for: ' + row.geoname)
+        logger.error(e.response.text)
         continue
     resp_body = r.json()
     url = resp_body['url']
-    df_reports.loc[index, 'url'] = url
+    df_attempts.loc[index, 'url'] = url
     zip = os.path.join(WORKING_DIR,row.id+'.zip')
-    df_reports.loc[index, 'zip'] = zip
+    df_attempts.loc[index, 'zip'] = zip
     urllib.request.urlretrieve(url, zip)
     time.sleep(8)
     # break
 
 logger.info('Unzip and organize retrieved data')
-for index, row in df_reports.iterrows():
-    if row.zip is None:
+for index, row in df_attempts.iterrows():
+    if pd.isnull(row.zip):
         continue
     with zipfile.ZipFile(row.zip, 'r') as zip_ref:
         zip_list = zip_ref.namelist()
@@ -203,40 +230,43 @@ for index, row in df_reports.iterrows():
                 unzipped_csv = os.path.join(WORKING_DIR, f)
                 renamed_csv = os.path.join(WORKING_DIR, row.geoname.replace(' ','-').replace('/','|')+'_'+str(row.year)+'.csv')
                 os.rename(unzipped_csv, renamed_csv)
-                df_reports.loc[index, 'csv'] = renamed_csv
+                df_attempts.loc[index, 'csv'] = renamed_csv
                 # break
     # break
 
 logger.info('Load data, calculate statistics, and record results')
-for index, row in df_reports.iterrows():
-    if row.csv is None:
+for index, row in df_attempts.iterrows():
+    if pd.isnull(row.csv):
         continue
     try:
         df_entry = pd.read_csv(row.csv)
     except EmptyDataError as e:
         logger.debug('No fishing records for ' + row.geoname + ' in ' + str(row.year))
-        df_reports.loc[index, 'value'] = 0
+        df_attempts.loc[index, 'value'] = 0
         continue
     sum = df_entry['Fishing hours'].sum()
-    df_reports.loc[index, 'value'] = sum
+    df_attempts.loc[index, 'value'] = sum
     # break
 
 logger.info('Store results locally and upload them to Carto')
 
 # record reports that failed, whose reports are thus missing
-df_failures = df_reports[df_reports['value'].isnull()]
+record_index = pd.notnull(df_attempts['value'])
+df_failures = df_attempts[~record_index]
 if len(df_failures) > 0:
-    failures_csv = os.path.join(WORKING_DIR, 'gfw-api_fishing-effort_failures.csv')
+    failures_csv = os.path.join(WORKING_DIR, 'gfw-api_fishing-effort_retry-failures.csv')
     with contextlib.suppress(FileNotFoundError):
         os.remove(failures_csv)
     df_failures.to_csv(failures_csv, header=True, index=False, )
 
 # do not retain local paths or file url (which ultimately derives
 # from api access, and is probably ephemeral anyway)
-df_reports.drop(columns=['url','zip','csv'], inplace=True)
-reports_csv = os.path.join(WORKING_DIR, 'gfw-api_fishing-effort.csv')
+df_attempts.drop(columns=['url','zip','csv'], inplace=True, errors='ignore')
+reports_csv = os.path.join(WORKING_DIR, 'gfw-api_fishing-effort_retries.csv')
 with contextlib.suppress(FileNotFoundError):
     os.remove(reports_csv)
-df_reports.to_csv(reports_csv, header=True, index=False, )
+df_attempts.to_csv(reports_csv, header=True, index=False, )
 
-to_carto(df_reports, dataset_name, if_exists='replace')
+record_index = pd.notnull(df_attempts['value'])
+if len(df_attempts[record_index]) > 0:
+    to_carto(df_attempts[record_index], dataset_name, if_exists='append')
