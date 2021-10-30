@@ -151,8 +151,9 @@ def pull_data(row, variable, depth):
     df_resp['ord_flow'] = row['ord_flow']
     df_resp['variable'] = variable
     df_resp['depth'] = depth
+    df_resp['osm_name'] = row['osm_name']
     cols_reorder = ['longitude','latitude','gridCentreLon','gridCentreLat','dt','variable','depth','value',
-            'hyriv_id','pfaf_id_12','hybas_id_5','hybas_id_3','ord_flow']
+            'hyriv_id','pfaf_id_12','hybas_id_5','hybas_id_3','ord_flow','osm_name']
     df_resp = df_resp[cols_reorder]
     return df_resp
 
