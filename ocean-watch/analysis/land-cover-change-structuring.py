@@ -18,6 +18,9 @@
 import os
 import pandas as pd
 
+from cartoframes.auth import set_default_credentials
+from cartoframes import read_carto, to_carto
+
 # paths to input data objects
 data_folder = '/mnt/c/Users/PKerins.Local/World Resources Institute/OceanData - Documents/modified_data/land-cover-change'
 calcs_16 = os.path.join(data_folder, 'land-cover-change-areas-by-territory_2015-2016_gadm.csv')
@@ -79,5 +82,14 @@ mask = df_complete['variable']=='anyUrban'
 df_complete.loc[mask, 'widget'] = 'land cover change: urbanization'
 
 # export final output
-path_output = os.path.join(data_folder, 'ow_land-cover-change.csv')
+dataset_name = 'ocn_calcs_016_land_cover_change_by_territory'
+path_output = os.path.join(data_folder, dataset_name+'.csv')
 df_complete.to_csv(path_output,index=False)
+
+# upload to carto
+CARTO_USER = os.getenv('CARTO_WRI_RW_USER')
+CARTO_KEY = os.getenv('CARTO_WRI_RW_KEY')
+set_default_credentials(username=CARTO_USER,
+                        base_url="https://{user}.carto.com/".format(user=CARTO_USER),
+                        api_key=CARTO_KEY)
+to_carto(df_complete, dataset_name, if_exists='replace')
