@@ -156,29 +156,43 @@ def build_req_data_postgis_json(report_name, date_pair, geom_geojson,
     req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
     return req_data
 
+def build_req_data_mrgid(report_name, date_pair, mrgid):
+    # construct data object
+    req_data = {}
+    req_data['name'] = report_name
+    req_data['region'] = {'dataset':'public-eez-areas','id':mrgid}
+    req_data['type'] = 'detail'
+    req_data['timeGroup'] = 'none'
+    req_data['filters'] = ['']
+    req_data['datasets'] = ['public-global-fishing-tracks:latest']
+    date_format = '%Y-%m-%d'
+    req_data['dateRange'] = [date_pair[0].strftime(date_format), date_pair[1].strftime(date_format)]
+    return req_data
+
 logger.info('Initiate report generation for missing entries (zone-year pairs)')
 report_name_template = 'Total Observed Fishing Effort in {}, {}'
 for index, row in df_combined.iterrows():
     # shortcut to skip some unfulfillable requests
-    skip_list = [
-        8493, # canada
-        8492, # indonesia
-        8322, # philippines
-        5690, # russia
-    ]
-    if row.mrgid in skip_list:
-        logger.debug('Skipping '+row.geoname)
-        continue
+    # skip_list = [
+    #     8493, # canada
+    #     8492, # indonesia
+    #     8322, # philippines
+    #     5690, # russia
+    # ]
+    # if row.mrgid in skip_list:
+    #     logger.debug('Skipping '+row.geoname)
+    #     continue
     logger.debug('Request reports for zone: ' + row.geoname + ', ' + str(row.year))
     date_pair = (datetime.strptime(str(row.year)+'-01-01', '%Y-%m-%d'), datetime.strptime(str(row.year)+'-12-31', '%Y-%m-%d'))
     report_name = report_name_template.format(row.geoname, date_pair[0].year)
 
-    req_data_postgis = build_req_data_postgis_json(report_name, date_pair, row.the_geom_geojson, 
-            value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
+    # req_data = build_req_data_postgis_json(report_name, date_pair, row.the_geom_geojson, 
+    #         value=row.geoname, geoname=row.geoname, mrgid=row.mrgid, gfw_id=None)
+    req_data = build_req_data_mrgid(report_name, date_pair, row.mrgid)
     with open(os.path.join(WORKING_DIR, 'postgis.json'), 'w', encoding='utf-8') as f:
-        json.dump(req_data_postgis, f, ensure_ascii=False, indent=4)
+        json.dump(req_data, f, ensure_ascii=False, indent=4)
 
-    r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data_postgis))
+    r = requests.post(INITIATE_REPORT_ENDPOINT, headers=INITIATE_REPORT_HEADERS, data=json.dumps(req_data))
     try:
         r.raise_for_status()
     except HTTPError as e:
@@ -196,7 +210,7 @@ for index, row in df_combined.iterrows():
         time.sleep(5)
     # break
 
-time.sleep(120)
+time.sleep(10800)
 
 logger.info('Retrieve report URLs and download results')
 for index, row in df_attempts.iterrows():

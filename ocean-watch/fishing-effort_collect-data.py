@@ -239,4 +239,4 @@ with contextlib.suppress(FileNotFoundError):
     os.remove(reports_csv)
 df_reports.to_csv(reports_csv, header=True, index=False, )
 
-to_carto(df_reports, dataset_name, if_exists='replace')
+# to_carto(df_reports, dataset_name, if_exists='replace')
